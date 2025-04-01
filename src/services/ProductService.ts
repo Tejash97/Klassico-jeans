@@ -1,4 +1,3 @@
-
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -143,14 +142,69 @@ export const getProductBySlug = async (slug: string): Promise<Product | null> =>
   } : null;
 };
 
+export const generateUniqueSlug = async (baseSlug: string): Promise<string> => {
+  try {
+    const { count, error } = await supabase
+      .from('products')
+      .select('*', { count: 'exact', head: true })
+      .eq('slug', baseSlug);
+    
+    if (error) {
+      console.error('Error checking slug uniqueness:', error);
+      return baseSlug;
+    }
+    
+    if (count === 0) {
+      return baseSlug;
+    }
+    
+    let newSlug = '';
+    let counter = 1;
+    let isUnique = false;
+    
+    while (!isUnique) {
+      newSlug = `${baseSlug}-${counter}`;
+      
+      const { count: newCount, error: newError } = await supabase
+        .from('products')
+        .select('*', { count: 'exact', head: true })
+        .eq('slug', newSlug);
+      
+      if (newError) {
+        console.error('Error checking slug uniqueness:', newError);
+        return `${baseSlug}-${Date.now()}`;
+      }
+      
+      if (newCount === 0) {
+        isUnique = true;
+      } else {
+        counter++;
+      }
+    }
+    
+    return newSlug;
+  } catch (error) {
+    console.error('Error in generateUniqueSlug:', error);
+    return `${baseSlug}-${Date.now()}`;
+  }
+};
+
 export const createProduct = async (product: Omit<Product, 'id' | 'created_at' | 'updated_at'>): Promise<Product | null> => {
   try {
-    // Log the product data for debugging
     console.log('Creating product with data:', product);
+    
+    const uniqueSlug = await generateUniqueSlug(product.slug);
+    
+    const productToCreate = {
+      ...product,
+      slug: uniqueSlug
+    };
+    
+    console.log('Creating product with unique slug:', uniqueSlug);
     
     const { data, error } = await supabase
       .from('products')
-      .insert([product])
+      .insert([productToCreate])
       .select()
       .single();
     
@@ -178,9 +232,25 @@ export const updateProduct = async (id: string, product: Partial<Omit<Product, '
   try {
     console.log('Updating product with ID:', id, 'and data:', product);
     
+    let productToUpdate = { ...product };
+    
+    if (product.slug) {
+      const { data: currentProduct } = await supabase
+        .from('products')
+        .select('slug')
+        .eq('id', id)
+        .single();
+      
+      if (currentProduct && currentProduct.slug !== product.slug) {
+        const uniqueSlug = await generateUniqueSlug(product.slug);
+        productToUpdate.slug = uniqueSlug;
+        console.log('Using unique slug for update:', uniqueSlug);
+      }
+    }
+    
     const { data, error } = await supabase
       .from('products')
-      .update(product)
+      .update(productToUpdate)
       .eq('id', id)
       .select()
       .single();
@@ -238,12 +308,10 @@ export const uploadProductImage = async (file: File, productId: string): Promise
   try {
     console.log('Uploading image for product ID:', productId, 'File:', file.name, 'Size:', file.size);
     
-    // Create a unique filename
     const fileExt = file.name.split('.').pop();
     const timestamp = new Date().getTime();
     const filePath = `${productId}-${timestamp}.${fileExt}`;
     
-    // Upload the file
     const { data, error: uploadError } = await supabase.storage
       .from('product-images')
       .upload(filePath, file, {
@@ -259,7 +327,6 @@ export const uploadProductImage = async (file: File, productId: string): Promise
     
     console.log('File uploaded successfully:', data?.path);
     
-    // Get the public URL
     const { data: urlData } = supabase.storage
       .from('product-images')
       .getPublicUrl(filePath);
